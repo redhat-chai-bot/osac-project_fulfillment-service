@@ -103,4 +103,43 @@ var _ = Describe("Ingress separation", func() {
 		defer response.Body.Close()
 		Expect(response.StatusCode).To(Equal(http.StatusNotFound))
 	})
+
+	// The console WebSocket connect endpoint must be routed to the console-proxy-ws cluster
+	// (port 8090, HTTP/1.1) on both the external and internal listeners. A plain GET to the
+	// endpoint (without a WebSocket upgrade) returns 401 because the console proxy rejects
+	// unauthenticated requests. This is enough to confirm routing: a 401 means the request
+	// reached the console proxy, whereas a missing route would fall through to the
+	// rest-gateway and return a 404 or 405.
+	It("Should route the console connect endpoint via the internal ingress", func() {
+		request, err := http.NewRequestWithContext(
+			ctx,
+			http.MethodGet,
+			"/api/fulfillment/v1/console_sessions/connect",
+			nil,
+		)
+		Expect(err).ToNot(HaveOccurred())
+		response, err := tool.InternalView().AdminClient().Do(request)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response).ToNot(BeNil())
+		defer response.Body.Close()
+		// 401 confirms the request reached the console proxy (which rejects
+		// non-WebSocket / unauthenticated requests) rather than falling through
+		// to the rest-gateway.
+		Expect(response.StatusCode).To(Equal(http.StatusUnauthorized))
+	})
+
+	It("Should route the console connect endpoint via the external ingress", func() {
+		request, err := http.NewRequestWithContext(
+			ctx,
+			http.MethodGet,
+			"/api/fulfillment/v1/console_sessions/connect",
+			nil,
+		)
+		Expect(err).ToNot(HaveOccurred())
+		response, err := tool.ExternalView().AdminClient().Do(request)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response).ToNot(BeNil())
+		defer response.Body.Close()
+		Expect(response.StatusCode).To(Equal(http.StatusUnauthorized))
+	})
 })
