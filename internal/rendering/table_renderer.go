@@ -29,6 +29,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
+	"github.com/google/cel-go/common/types/traits"
 	"github.com/google/cel-go/ext"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -391,21 +392,25 @@ func (r *TableRenderer) renderCell(ctx context.Context, col *columnLayout, val r
 				return r.renderCellLookup(ctx, val, messageType.Descriptor())
 			}
 		}
+	case traits.Lister:
+		if col.Type != "" {
+			enumType, _ := protoregistry.GlobalTypes.FindEnumByName(col.Type)
+			if enumType != nil {
+				return r.renderCellEnumList(val, enumType.Descriptor())
+			}
+		}
 	}
 	return r.renderCellAny(val)
 }
 
-// renderCellEnum renders an enum value as a string.
-func (r *TableRenderer) renderCellEnum(val types.Int, enumDesc protoreflect.EnumDescriptor) error {
-	// Get the text of the name of the enum value:
+// formatEnumValue converts a numeric enum value to its shortened human-readable name.
+// It strips the common prefix shared by all values of the enum type (e.g. "CLUSTER_STATE_PENDING"
+// becomes "PENDING").
+func formatEnumValue(num int64, enumDesc protoreflect.EnumDescriptor) string {
 	valueDescs := enumDesc.Values()
-	valueDesc := valueDescs.ByNumber(protoreflect.EnumNumber(val)) // #nosec G115 -- proto enum fits int32
+	valueDesc := valueDescs.ByNumber(protoreflect.EnumNumber(num)) // #nosec G115 -- proto enum fits int32
 	if valueDesc == nil {
-		_, err := fmt.Fprintf(r.writer, "UNKNOWN:%d", val)
-		if err != nil {
-			return err
-		}
-		return nil
+		return fmt.Sprintf("UNKNOWN:%d", num)
 	}
 	valueTxt := string(valueDesc.Name())
 
@@ -423,7 +428,33 @@ func (r *TableRenderer) renderCellEnum(val types.Int, enumDesc protoreflect.Enum
 		}
 	}
 
-	_, err := fmt.Fprintf(r.writer, "%s", valueTxt)
+	return valueTxt
+}
+
+// renderCellEnum renders an enum value as a string.
+func (r *TableRenderer) renderCellEnum(val types.Int, enumDesc protoreflect.EnumDescriptor) error {
+	_, err := fmt.Fprintf(r.writer, "%s", formatEnumValue(int64(val), enumDesc))
+	return err
+}
+
+// renderCellEnumList renders a repeated enum field as a comma-separated list of shortened names.
+func (r *TableRenderer) renderCellEnumList(list traits.Lister, enumDesc protoreflect.EnumDescriptor) error {
+	size := list.Size().(types.Int)
+	if size == 0 {
+		_, err := fmt.Fprintf(r.writer, "-")
+		return err
+	}
+	var parts []string
+	for i := types.Int(0); i < size; i++ {
+		elem := list.Get(i)
+		intVal, ok := elem.(types.Int)
+		if !ok {
+			parts = append(parts, fmt.Sprintf("%v", elem))
+			continue
+		}
+		parts = append(parts, formatEnumValue(int64(intVal), enumDesc))
+	}
+	_, err := fmt.Fprintf(r.writer, "%s", strings.Join(parts, ","))
 	return err
 }
 
