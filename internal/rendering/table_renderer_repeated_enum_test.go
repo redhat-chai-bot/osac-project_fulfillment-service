@@ -22,7 +22,7 @@ import (
 	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/proto"
 
-	testsv1 "github.com/osac-project/fulfillment-service/internal/api/osac/tests/v1"
+	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/fulfillment-service/internal/reflection"
 )
 
@@ -34,11 +34,11 @@ var _ = Describe("Repeated enum rendering", func() {
 		DeferCleanup(ctrl.Finish)
 	})
 
-	// renderTestObject renders the given test object with a table layout that includes
-	// a column for the my_int32_list field typed as osac.tests.v1.MyEnum.
-	renderTestObject := func(ctx context.Context, items []*testsv1.Object) string {
-		// Create the object helper for the test Object type:
-		objectDescriptor := (&testsv1.Object{}).ProtoReflect().Descriptor()
+	// renderDiskImages renders the given DiskImage objects using the table layout
+	// that includes an ARCHITECTURE column typed as osac.private.v1.Architecture.
+	renderDiskImages := func(ctx context.Context, items []*privatev1.DiskImage) string {
+		// Create the object helper for the DiskImage type:
+		objectDescriptor := (&privatev1.DiskImage{}).ProtoReflect().Descriptor()
 		objectFullName := objectDescriptor.FullName()
 		objectHelper := reflection.NewMockObjectHelper(ctrl)
 		objectHelper.EXPECT().FullName().
@@ -70,9 +70,7 @@ var _ = Describe("Repeated enum rendering", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		// Override the table layout to include a repeated-enum column.
-		// We use my_int32_list as the source field and type it as osac.tests.v1.MyEnum
-		// to simulate a repeated enum field.
+		// Render the DiskImage objects:
 		messages := make([]proto.Message, len(items))
 		for i, item := range items {
 			messages[i] = item
@@ -83,54 +81,63 @@ var _ = Describe("Repeated enum rendering", func() {
 		return buffer.String()
 	}
 
-	It("Renders a single-value repeated enum as the shortened name", func(ctx context.Context) {
-		output := renderTestObject(
+	It("Renders a single-value repeated enum as AMD64", func(ctx context.Context) {
+		output := renderDiskImages(
 			ctx,
-			[]*testsv1.Object{
-				{
-					Id: "obj-1",
-					Metadata: &testsv1.Metadata{
-						Name: "test-obj",
-					},
-					MyInt32List: []int32{1},
-				},
+			[]*privatev1.DiskImage{
+				privatev1.DiskImage_builder{
+					Id: "img-1",
+					Metadata: privatev1.Metadata_builder{
+						Name: "rhel-9",
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						Architectures: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+					}.Build(),
+				}.Build(),
 			},
 		)
-		Expect(output).To(ContainSubstring("VALUE_A"))
+		Expect(output).To(ContainSubstring("AMD64"))
 		Expect(output).ToNot(ContainSubstring("[1]"))
 	})
 
-	It("Renders a multi-value repeated enum as comma-separated names", func(ctx context.Context) {
-		output := renderTestObject(
+	It("Renders a multi-value repeated enum as AMD64,ARM64", func(ctx context.Context) {
+		output := renderDiskImages(
 			ctx,
-			[]*testsv1.Object{
-				{
-					Id: "obj-2",
-					Metadata: &testsv1.Metadata{
-						Name: "test-obj",
-					},
-					MyInt32List: []int32{1, 2},
-				},
+			[]*privatev1.DiskImage{
+				privatev1.DiskImage_builder{
+					Id: "img-2",
+					Metadata: privatev1.Metadata_builder{
+						Name: "rhel-9-multi",
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						Architectures: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+							privatev1.Architecture_ARCHITECTURE_ARM64,
+						},
+					}.Build(),
+				}.Build(),
 			},
 		)
-		Expect(output).To(ContainSubstring("VALUE_A,VALUE_B"))
+		Expect(output).To(ContainSubstring("AMD64,ARM64"))
 		Expect(output).ToNot(ContainSubstring("[1 2]"))
 	})
 
 	It("Renders an empty repeated enum as a placeholder", func(ctx context.Context) {
-		output := renderTestObject(
+		output := renderDiskImages(
 			ctx,
-			[]*testsv1.Object{
-				{
-					Id: "obj-3",
-					Metadata: &testsv1.Metadata{
-						Name: "test-obj",
-					},
-					MyInt32List: []int32{},
-				},
+			[]*privatev1.DiskImage{
+				privatev1.DiskImage_builder{
+					Id: "img-3",
+					Metadata: privatev1.Metadata_builder{
+						Name: "no-arch",
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{}.Build(),
+				}.Build(),
 			},
 		)
-		// The ENUM LIST column should show "-" for empty lists
-		Expect(output).To(MatchRegexp(`ENUM LIST.*\n.*-`))
+		// The ARCHITECTURE column should show "-" for empty lists
+		Expect(output).To(MatchRegexp(`ARCHITECTURE.*\n.*-`))
 	})
 })

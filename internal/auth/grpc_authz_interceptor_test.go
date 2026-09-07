@@ -17,6 +17,8 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -29,6 +31,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
+	k8sfiles "github.com/osac-project/fulfillment-service/internal/kubernetes/files"
 	"github.com/osac-project/fulfillment-service/internal/testing"
 	"github.com/osac-project/fulfillment-service/internal/uuid"
 )
@@ -99,6 +102,21 @@ var _ = Describe("Rego authorization interceptor", func() {
 
 	Describe("Permission checks", func() {
 		var interceptor *GrpcAuthzInterceptor
+
+		// emergencyNamespace returns the namespace used by the interceptor to build emergency
+		// service account names. When running inside a Kubernetes pod the namespace comes from
+		// the projected service-account volume; otherwise it defaults to "osac".
+		emergencyNamespace := func() string {
+			data, err := os.ReadFile(k8sfiles.ServiceAccountNamespace)
+			if err != nil {
+				return grpcAuthzDefaultNamespace
+			}
+			ns := strings.TrimSpace(string(data))
+			if ns == "" {
+				return grpcAuthzDefaultNamespace
+			}
+			return ns
+		}
 
 		// createKubernetesToken creates a token resembling the ones issued by the Kubernetes service account
 		// token issuer.
@@ -271,8 +289,9 @@ var _ = Describe("Rego authorization interceptor", func() {
 
 		DescribeTable(
 			"Allows selected Kubernetes service accounts on the private API",
-			func(ctx context.Context, namespace, name string) {
-				token := createKubernetesToken(namespace, name, nil)
+			func(ctx context.Context, name string) {
+				ns := emergencyNamespace()
+				token := createKubernetesToken(ns, name, nil)
 				ctx = ContextWithToken(ctx, token)
 				handled := false
 				_, err := interceptor.UnaryServer(
@@ -294,26 +313,27 @@ var _ = Describe("Rego authorization interceptor", func() {
 			},
 			Entry(
 				"Administrator",
-				"osac", "admin",
+				"admin",
 			),
 			Entry(
 				"Template publisher",
-				"osac", "template-publisher",
+				"template-publisher",
 			),
 			Entry(
 				"Controller manager",
-				"osac", "osac-operator",
+				"osac-operator",
 			),
 			Entry(
 				"Alternative controller manager",
-				"osac", "osac-operator-controller-manager",
+				"osac-operator-controller-manager",
 			),
 		)
 
 		DescribeTable(
 			"Allows selected Kubernetes service accounts on the public API",
-			func(ctx context.Context, namespace, name string) {
-				token := createKubernetesToken(namespace, name, nil)
+			func(ctx context.Context, name string) {
+				ns := emergencyNamespace()
+				token := createKubernetesToken(ns, name, nil)
 				ctx = ContextWithToken(ctx, token)
 				handled := false
 				_, err := interceptor.UnaryServer(
@@ -335,15 +355,15 @@ var _ = Describe("Rego authorization interceptor", func() {
 			},
 			Entry(
 				"Administrator",
-				"osac", "admin",
+				"admin",
 			),
 			Entry(
 				"Template publisher",
-				"osac", "template-publisher",
+				"template-publisher",
 			),
 			Entry(
 				"Controller manager",
-				"osac", "osac-operator-controller-manager",
+				"osac-operator-controller-manager",
 			),
 		)
 

@@ -17,8 +17,15 @@ columns:
   value: this.id
 
 - header: NAME
-  value: "has(this.metadata) && has(this.metadata.name)? this.metadata.name: '-'"
+  value: "has(this.metadata.name)? this.metadata.name: '-'"
 
-- header: ENUM LIST
-  value: this.my_int32_list
-  type: osac.tests.v1.MyEnum
+- header: ARCHITECTURE
+  value: this.spec.architectures
+  type: osac.private.v1.Architecture
+
+- header: STATE
+  value: this.status.state
+  type: osac.private.v1.DiskImageState
+
+- header: DESCRIPTION
+  value: this.spec.description

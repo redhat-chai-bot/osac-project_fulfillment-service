@@ -1,0 +1,64 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "osac/private/v1/architecture_type.proto";
+import "osac/private/v1/metadata_type.proto";
+
+// Lifecycle states for DiskImage resources.
+enum DiskImageState {
+  // State is unknown or has not been determined yet.
+  DISK_IMAGE_STATE_UNSPECIFIED = 0;
+
+  // The disk image is active and available for use.
+  DISK_IMAGE_STATE_ACTIVE = 1;
+}
+
+// Represents a disk image in the OSAC platform.
+//
+// DiskImage is a platform-scoped catalog resource that defines an OS image available for provisioning
+// compute instances and bare-metal instances. Cloud Provider Admins manage the image catalog through
+// the private API.
+//
+// buf:lint:ignore OSAC_OBJECT_SHAPE
+message DiskImage {
+  // Unique identifier of the disk image.
+  string id = 1;
+
+  // Metadata of the disk image.
+  Metadata metadata = 2;
+
+  // Desired configuration of the disk image (admin-modifiable).
+  DiskImageSpec spec = 3;
+
+  // Current operational status of the disk image.
+  DiskImageStatus status = 4;
+}
+
+// Defines the desired configuration for a DiskImage.
+message DiskImageSpec {
+  // Human-readable description of the disk image.
+  string description = 1;
+
+  // CPU architectures supported by this disk image.
+  repeated Architecture architectures = 2;
+}
+
+// Represents the current operational state of a DiskImage.
+message DiskImageStatus {
+  // Current lifecycle state of the disk image.
+  DiskImageState state = 1;
+}
