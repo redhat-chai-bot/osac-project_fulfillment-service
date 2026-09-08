@@ -35,6 +35,12 @@ type mockClient struct {
 	failTenantUpdate    bool                          // Trigger tenant update failure
 	returnNilTenant     bool                          // GetTenant returns nil without error
 	tenantUpdateCalled  bool                          // Track whether UpdateTenant was called
+
+	// Pre-existing users for linkExistingGroupMembers testing
+	realmGroupUsers       map[string][]*User  // groupPath -> users
+	addedToOrganization   map[string][]string // tenantName -> []userID
+	failAddToOrganization bool
+	failListRealmUsers    bool
 }
 
 func (m *mockClient) CreateTenant(ctx context.Context, tenant *Tenant) (*Tenant, error) {
@@ -509,6 +515,90 @@ var _ = Describe("TenantManager", func() {
 			Expect(failingMock.deletedTenant).To(Equal("test-tenant"))
 		})
 
+		It("links pre-existing group members to the new organization", func() {
+			mock.realmGroupUsers = map[string][]*User{
+				"/test-tenant": {
+					{ID: "existing-user-1", Username: "alice"},
+					{ID: "existing-user-2", Username: "bob"},
+				},
+			}
+
+			config := &TenantConfig{
+				Name:               "test-tenant",
+				DisplayName:        "Test Tenant",
+				Enabled:            new(true),
+				BreakGlassPassword: "breakglass123",
+			}
+
+			credentials, err := manager.CreateTenant(ctx, config)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(credentials).ToNot(BeNil())
+
+			// Verify pre-existing users were added to the organization
+			Expect(mock.addedToOrganization).ToNot(BeNil())
+			Expect(mock.addedToOrganization["test-tenant"]).To(ConsistOf(
+				"existing-user-1", "existing-user-2",
+			))
+		})
+
+		It("succeeds even when no pre-existing group exists", func() {
+			// realmGroupUsers is nil — no pre-existing groups
+			config := &TenantConfig{
+				Name:               "test-tenant",
+				DisplayName:        "Test Tenant",
+				Enabled:            new(true),
+				BreakGlassPassword: "breakglass123",
+			}
+
+			credentials, err := manager.CreateTenant(ctx, config)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(credentials).ToNot(BeNil())
+
+			// No users should be linked
+			Expect(mock.addedToOrganization).To(BeNil())
+		})
+
+		It("succeeds even when pre-existing group is empty", func() {
+			mock.realmGroupUsers = map[string][]*User{
+				"/test-tenant": {},
+			}
+
+			config := &TenantConfig{
+				Name:               "test-tenant",
+				DisplayName:        "Test Tenant",
+				Enabled:            new(true),
+				BreakGlassPassword: "breakglass123",
+			}
+
+			credentials, err := manager.CreateTenant(ctx, config)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(credentials).ToNot(BeNil())
+
+			// No users should be linked
+			Expect(mock.addedToOrganization).To(BeNil())
+		})
+
+		It("succeeds even when adding a user to the organization fails", func() {
+			mock.realmGroupUsers = map[string][]*User{
+				"/test-tenant": {
+					{ID: "existing-user-1", Username: "alice"},
+				},
+			}
+			mock.failAddToOrganization = true
+
+			config := &TenantConfig{
+				Name:               "test-tenant",
+				DisplayName:        "Test Tenant",
+				Enabled:            new(true),
+				BreakGlassPassword: "breakglass123",
+			}
+
+			// CreateTenant should still succeed — linking is best-effort
+			credentials, err := manager.CreateTenant(ctx, config)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(credentials).ToNot(BeNil())
+		})
+
 		It("rolls back tenant even when original context is cancelled", func() {
 			// Create a mock that fails on user creation
 			failingMock := &mockClient{
@@ -691,7 +781,26 @@ var _ = Describe("TenantManager", func() {
 // Stub methods to satisfy ClientInterface (not used in manager tests)
 
 func (m *mockClient) AddUserToOrganization(ctx context.Context, tenantName string, userID string) error {
-	return fmt.Errorf("not implemented in test mock")
+	if m.failAddToOrganization {
+		return fmt.Errorf("simulated add-to-organization failure")
+	}
+	if m.addedToOrganization == nil {
+		m.addedToOrganization = make(map[string][]string)
+	}
+	m.addedToOrganization[tenantName] = append(m.addedToOrganization[tenantName], userID)
+	return nil
+}
+
+func (m *mockClient) ListRealmUsers(ctx context.Context, groupPath string) ([]*User, error) {
+	if m.failListRealmUsers {
+		return nil, fmt.Errorf("simulated list-realm-users failure")
+	}
+	if m.realmGroupUsers != nil {
+		if users, ok := m.realmGroupUsers[groupPath]; ok {
+			return users, nil
+		}
+	}
+	return nil, fmt.Errorf("realm group with path %q not found", groupPath)
 }
 
 func (m *mockClient) CreateUserInRealm(ctx context.Context, user *User) (*User, error) {

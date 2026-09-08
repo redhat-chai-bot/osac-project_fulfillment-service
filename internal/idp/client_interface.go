@@ -47,6 +47,7 @@ type ClientInterface interface {
 	GetRealmRole(ctx context.Context, roleName string) (*Role, error)
 	AssignIdpManagerPermissions(ctx context.Context, userID string) error
 	GetUserByUsername(ctx context.Context, tenantName, username string) (*User, error)
+	ListRealmUsers(ctx context.Context, groupPath string) ([]*User, error)
 	CreateIdentityProvider(ctx context.Context, tenantName string, idpProvider *IdentityProvider) (*IdentityProvider, error)
 	GetIdentityProvider(ctx context.Context, tenantName, alias string) (*IdentityProvider, error)
 	DeleteIdentityProvider(ctx context.Context, tenantName, alias string) error

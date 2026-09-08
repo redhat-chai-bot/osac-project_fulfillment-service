@@ -448,6 +448,21 @@ func (mr *MockClientInterfaceMockRecorder) ListIdentityProviders(ctx, tenantName
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListIdentityProviders", reflect.TypeOf((*MockClientInterface)(nil).ListIdentityProviders), ctx, tenantName)
 }
 
+// ListRealmUsers mocks base method.
+func (m *MockClientInterface) ListRealmUsers(ctx context.Context, groupPath string) ([]*User, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListRealmUsers", ctx, groupPath)
+	ret0, _ := ret[0].([]*User)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListRealmUsers indicates an expected call of ListRealmUsers.
+func (mr *MockClientInterfaceMockRecorder) ListRealmUsers(ctx, groupPath any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListRealmUsers", reflect.TypeOf((*MockClientInterface)(nil).ListRealmUsers), ctx, groupPath)
+}
+
 // ListTenantRoles mocks base method.
 func (m *MockClientInterface) ListTenantRoles(ctx context.Context, tenantName string) ([]*Role, error) {
 	m.ctrl.T.Helper()

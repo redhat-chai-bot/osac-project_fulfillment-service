@@ -183,6 +183,14 @@ var _ = Describe("IDP Sync", func() {
 		ctrl = gomock.NewController(GinkgoT())
 		mockClient = idp.NewMockClientInterface(ctrl)
 
+		// linkExistingGroupMembers is best-effort and called on every
+		// CreateTenant — allow it for all tests (group not found is the
+		// expected default).
+		mockClient.EXPECT().
+			ListRealmUsers(gomock.Any(), gomock.Any()).
+			Return(nil, fmt.Errorf("realm group not found")).
+			AnyTimes()
+
 		idpManager, err = idp.NewTenantManager().
 			SetLogger(logger).
 			SetClient(mockClient).

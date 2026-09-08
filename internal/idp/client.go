@@ -397,8 +397,22 @@ func (c *Client) DeleteUser(ctx context.Context, tenantName, userID string) erro
 // ListTenantRoles lists all tenant-level roles.
 // Note: Organizations in Keycloak don't have their own roles - they use realm roles.
 func (c *Client) ListTenantRoles(ctx context.Context, tenantName string) ([]*Role, error) {
-	// TODO: implement function
-	return nil, nil
+	response, err := c.httpClient.DoRequest(ctx, http.MethodGet, fmt.Sprintf("/admin/realms/%s/roles", c.realmName), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list realm roles: %w", err)
+	}
+	defer response.Body.Close()
+
+	var kcRoles []keycloakRole
+	if err = json.NewDecoder(response.Body).Decode(&kcRoles); err != nil {
+		return nil, fmt.Errorf("failed to decode realm roles response: %w", err)
+	}
+
+	roles := make([]*Role, len(kcRoles))
+	for i, kcRole := range kcRoles {
+		roles[i] = fromKeycloakRole(&kcRole)
+	}
+	return roles, nil
 }
 
 // ListClientRoles lists all roles for a specific client.
@@ -521,8 +535,22 @@ func (c *Client) RemoveClientRolesFromUser(ctx context.Context, tenantName, user
 
 // GetUserTenantRoles gets the tenant-level roles assigned to a user.
 func (c *Client) GetUserTenantRoles(ctx context.Context, tenantName, userID string) ([]*Role, error) {
-	// TODO: implement function
-	return nil, nil
+	response, err := c.httpClient.DoRequest(ctx, http.MethodGet, fmt.Sprintf("/admin/realms/%s/users/%s/role-mappings/realm", c.realmName, url.PathEscape(userID)), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user realm roles: %w", err)
+	}
+	defer response.Body.Close()
+
+	var kcRoles []keycloakRole
+	if err = json.NewDecoder(response.Body).Decode(&kcRoles); err != nil {
+		return nil, fmt.Errorf("failed to decode user realm roles response: %w", err)
+	}
+
+	roles := make([]*Role, len(kcRoles))
+	for i, kcRole := range kcRoles {
+		roles[i] = fromKeycloakRole(&kcRole)
+	}
+	return roles, nil
 }
 
 // GetUserClientRoles gets the client-level roles assigned to a user.
@@ -615,9 +643,17 @@ func (c *Client) GetRealmClientByClientID(ctx context.Context, clientID, realmNa
 
 // AssignTenantAdminPermissions grants administrative access to a tenant for the specified user.
 //
-// For Keycloak, this assigns organization-level admin roles to the user.
+// For Keycloak, this assigns the tenant-admin realm role to the user.
 func (c *Client) AssignTenantAdminPermissions(ctx context.Context, tenantName, userID string) error {
-	// TODO: implement function
+	domainRole, err := c.GetRealmRole(ctx, "tenant-admin")
+	if err != nil {
+		return fmt.Errorf("failed to get tenant-admin role from Keycloak: %w", err)
+	}
+	response, err := c.httpClient.DoRequest(ctx, http.MethodPost, fmt.Sprintf("/admin/realms/%s/users/%s/role-mappings/realm", c.realmName, url.PathEscape(userID)), []keycloakRole{*toKeycloakRole(domainRole)})
+	if err != nil {
+		return fmt.Errorf("failed to assign tenant-admin role to user: %w", err)
+	}
+	defer response.Body.Close()
 	return nil
 }
 
@@ -685,6 +721,134 @@ func (c *Client) getUserByUsername(ctx context.Context, username string) (*User,
 	}
 
 	return fromKeycloakUser(&kcUsers[0]), nil
+}
+
+// ListRealmUsers lists all users in the realm, with optional group-path filtering.
+// When groupPath is non-empty only users who belong to that Keycloak group are
+// returned (via the Keycloak "GET …/groups/{id}/members" endpoint). When
+// groupPath is empty, all realm users are returned.
+func (c *Client) ListRealmUsers(ctx context.Context, groupPath string) ([]*User, error) {
+	// If a group path was given, resolve it and list that group's members.
+	if groupPath != "" {
+		return c.listGroupMembers(ctx, groupPath)
+	}
+
+	// Otherwise list all realm users with pagination.
+	var allUsers []*User
+	const maxPerPage = 100
+	first := 0
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		query := url.Values{}
+		query.Set("first", fmt.Sprintf("%d", first))
+		query.Set("max", fmt.Sprintf("%d", maxPerPage))
+		path := fmt.Sprintf("/admin/realms/%s/users?%s", c.realmName, query.Encode())
+
+		response, err := c.httpClient.DoRequest(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list realm users: %w", err)
+		}
+
+		var kcUsers []keycloakUser
+		err = json.NewDecoder(response.Body).Decode(&kcUsers)
+		response.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode realm users response: %w", err)
+		}
+
+		for i := range kcUsers {
+			allUsers = append(allUsers, fromKeycloakUser(&kcUsers[i]))
+		}
+
+		if len(kcUsers) < maxPerPage {
+			break
+		}
+		first += maxPerPage
+	}
+	return allUsers, nil
+}
+
+// listGroupMembers returns all members of a realm-level Keycloak group identified
+// by its path (e.g. "/tenant1"). This is used to discover pre-existing fixture
+// users whose group membership implies they belong to a tenant.
+func (c *Client) listGroupMembers(ctx context.Context, groupPath string) ([]*User, error) {
+	// Step 1: resolve the group path to an ID.
+	groupID, err := c.getRealmGroupIDByPath(ctx, groupPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve realm group path %q: %w", groupPath, err)
+	}
+
+	// Step 2: paginate through the group's members.
+	var allUsers []*User
+	const maxPerPage = 100
+	first := 0
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		path := fmt.Sprintf("/admin/realms/%s/groups/%s/members?first=%d&max=%d",
+			c.realmName, url.PathEscape(groupID), first, maxPerPage)
+
+		response, err := c.httpClient.DoRequest(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list group members: %w", err)
+		}
+
+		var kcUsers []keycloakUser
+		err = json.NewDecoder(response.Body).Decode(&kcUsers)
+		response.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode group members response: %w", err)
+		}
+
+		for i := range kcUsers {
+			allUsers = append(allUsers, fromKeycloakUser(&kcUsers[i]))
+		}
+
+		if len(kcUsers) < maxPerPage {
+			break
+		}
+		first += maxPerPage
+	}
+	return allUsers, nil
+}
+
+// getRealmGroupIDByPath resolves a realm-level group path (e.g. "/tenant1") to its
+// Keycloak group ID. This is distinct from organization groups — it queries
+// the realm-scoped groups endpoint.
+func (c *Client) getRealmGroupIDByPath(ctx context.Context, groupPath string) (string, error) {
+	// Keycloak supports searching realm groups by exact path.
+	query := url.Values{}
+	query.Set("q", groupPath)
+	query.Set("exact", "true")
+	path := fmt.Sprintf("/admin/realms/%s/groups?%s", c.realmName, query.Encode())
+
+	response, err := c.httpClient.DoRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to query realm groups: %w", err)
+	}
+	defer response.Body.Close()
+
+	var groups []groupNode
+	if err := json.NewDecoder(response.Body).Decode(&groups); err != nil {
+		return "", fmt.Errorf("failed to decode realm groups response: %w", err)
+	}
+
+	// Match by path — the search may return a superset.
+	normalized := "/" + strings.Trim(groupPath, "/")
+	for _, g := range groups {
+		if g.Path == normalized {
+			return g.ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("realm group with path %q not found", groupPath)
 }
 
 // deleteBreakGlassAccount is a Keycloak-specific helper that deletes the break-glass account.

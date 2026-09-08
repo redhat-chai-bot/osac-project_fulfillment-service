@@ -184,6 +184,11 @@ func (m *TenantManager) CreateTenant(ctx context.Context, config *TenantConfig) 
 		return nil, fmt.Errorf("failed to assign IdP manager permissions: %w", err)
 	}
 
+	// Step 4: Link pre-existing realm users whose group membership matches the
+	// new tenant. This is best-effort: failures are logged but do not prevent
+	// the tenant from being created.
+	m.linkExistingGroupMembers(ctx, config.Name)
+
 	m.logger.InfoContext(ctx, "IdP tenant created successfully",
 		slog.String("tenant", createdTenant.Name),
 	)
@@ -339,6 +344,74 @@ func (m *TenantManager) assignIdpManagerPermissions(ctx context.Context, userID 
 		slog.String("user_id", userID),
 	)
 	return nil
+}
+
+// linkExistingGroupMembers scans for pre-existing Keycloak users that belong
+// to a realm-level group matching the tenant name (e.g. "/tenant1") and adds
+// them to the newly created Keycloak Organization. This enables fixture users
+// provisioned via Keycloak realm import to automatically become organization
+// members so that their JWT tokens carry the correct organization claim.
+//
+// This method is best-effort: individual failures are logged as warnings but
+// do not prevent the tenant from being created successfully.
+func (m *TenantManager) linkExistingGroupMembers(ctx context.Context, tenantName string) {
+	groupPath := fmt.Sprintf("/%s", tenantName)
+
+	users, err := m.client.ListRealmUsers(ctx, groupPath)
+	if err != nil {
+		// The group may not exist — this is expected for tenants without
+		// pre-provisioned fixture users.
+		m.logger.DebugContext(ctx, "No pre-existing group found for tenant, skipping user linking",
+			slog.String("tenant", tenantName),
+			slog.String("group_path", groupPath),
+			slog.Any("error", err),
+		)
+		return
+	}
+
+	if len(users) == 0 {
+		m.logger.DebugContext(ctx, "No pre-existing users found in group for tenant",
+			slog.String("tenant", tenantName),
+			slog.String("group_path", groupPath),
+		)
+		return
+	}
+
+	m.logger.InfoContext(ctx, "Found pre-existing users to link to tenant",
+		slog.String("tenant", tenantName),
+		slog.Int("count", len(users)),
+	)
+
+	linked := 0
+	for _, user := range users {
+		if user.ID == "" {
+			continue
+		}
+
+		err := m.client.AddUserToOrganization(ctx, tenantName, user.ID)
+		if err != nil {
+			m.logger.WarnContext(ctx, "Failed to add pre-existing user to organization",
+				slog.String("tenant", tenantName),
+				slog.String("user_id", user.ID),
+				slog.String("username", user.Username),
+				slog.Any("error", err),
+			)
+			continue
+		}
+
+		linked++
+		m.logger.InfoContext(ctx, "Linked pre-existing user to tenant organization",
+			slog.String("tenant", tenantName),
+			slog.String("user_id", user.ID),
+			slog.String("username", user.Username),
+		)
+	}
+
+	m.logger.InfoContext(ctx, "Finished linking pre-existing users to tenant",
+		slog.String("tenant", tenantName),
+		slog.Int("linked", linked),
+		slog.Int("total", len(users)),
+	)
 }
 
 // DeleteTenant deletes a tenant from the IdP and all of its resources.
